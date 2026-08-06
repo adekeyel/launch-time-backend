@@ -12,6 +12,7 @@ router.use(authenticate);
 // multipart/form-data — optional "receipt" file (payment screenshot/PDF),
 // uploaded straight to Cloudinary.
 router.post('/', authorize('customer'), upload.single('receipt'), checkoutRules, validate, orderController.checkout);
+router.get('/verify-payment', orderController.verifyCardPayment);
 router.get('/', paginationRules, validate, orderController.listOrders);
 router.get('/:id', uuidParamRules('id'), validate, orderController.getOrder);
 router.put(

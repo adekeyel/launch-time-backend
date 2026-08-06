@@ -234,6 +234,23 @@ const forceUpdateOrderStatus = async (req, res) => {
   return ok(res, updated, 'Order status updated by admin.');
 };
 
+// PUT /api/admin/orders/:id/verify-payment
+// Marks a single order's transfer payment as verified (paid_at), unblocking
+// the vendor's own "start preparing" action. Card payments are verified
+// automatically via Flutterwave and don't need this — it's here for the
+// manual bank-transfer path.
+const verifyOrderPayment = async (req, res) => {
+  const [updated] = await orderModel.markPaid([req.params.id]);
+  if (!updated) {
+    // Either the order doesn't exist, or it was already marked paid —
+    // check which, so the admin gets an accurate message either way.
+    const existing = await orderModel.findById(req.params.id);
+    if (!existing) throw new ApiError(404, 'Order not found.');
+    return ok(res, existing, 'Payment was already verified for this order.');
+  }
+  return ok(res, updated, 'Payment verified — the vendor can now start preparing this order.');
+};
+
 // ---------------- ANALYTICS ----------------
 
 // GET /api/admin/analytics
@@ -353,6 +370,14 @@ const decideSettlement = async (req, res) => {
   }
   const updated = await settlementModel.updateStatus(req.params.id, status);
   if (!updated) throw new ApiError(404, 'Settlement not found.');
+
+  // A rejected settlement frees up the orders it had claimed, so the
+  // vendor can include them in a future request instead of them being
+  // stuck in limbo forever.
+  if (status === 'rejected') {
+    await orderModel.unlinkSettlement(req.params.id);
+  }
+
   return ok(res, updated, `Settlement ${status}.`);
 };
 
@@ -528,6 +553,7 @@ module.exports = {
   deleteAnyFood,
   listAllOrders,
   forceUpdateOrderStatus,
+  verifyOrderPayment,
   getAnalytics,
   listAllAds,
   createAd,

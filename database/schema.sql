@@ -459,3 +459,25 @@ CREATE TRIGGER trg_branches_updated_at BEFORE UPDATE ON branches
 DROP TRIGGER IF EXISTS trg_vendor_staff_updated_at ON vendor_staff;
 CREATE TRIGGER trg_vendor_staff_updated_at BEFORE UPDATE ON vendor_staff
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ============================================================
+-- Payment verification gate, settlement automation, ad tracking,
+-- and Flutterwave card payments (added after vendor go-live).
+-- ============================================================
+
+-- Links an order to the settlement batch it was paid out under, once
+-- eligible (delivered + payment verified + at least 1 day old) and
+-- requested. NULL means "not yet included in any settlement".
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS settlement_id UUID REFERENCES settlements(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_orders_settlement ON orders(settlement_id);
+
+-- Ad performance counters. Incremented by the public tracking endpoint;
+-- there is no historical/time-series breakdown, just running totals.
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS impressions INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS clicks INTEGER NOT NULL DEFAULT 0;
+
+-- Login looks up email case-insensitively (LOWER(email) = LOWER($1)) since
+-- a mismatched-case email would otherwise fail login with no useful error.
+-- This index keeps that lookup fast instead of scanning the whole table.
+CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));
+

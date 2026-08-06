@@ -37,6 +37,7 @@ router.delete('/foods/:id', uuidParamRules('id'), validate, adminController.dele
 // ---- Orders (oversight) ----
 router.get('/orders', paginationRules, validate, adminController.listAllOrders);
 router.put('/orders/:id', uuidParamRules('id'), validate, adminController.forceUpdateOrderStatus);
+router.put('/orders/:id/verify-payment', uuidParamRules('id'), validate, adminController.verifyOrderPayment);
 
 // ---- Ads (top / middle / bottom placements) ----
 router.get('/ads', adminController.listAllAds);

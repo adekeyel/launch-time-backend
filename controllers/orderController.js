@@ -6,6 +6,7 @@ const { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } = require('../u
 const { uploadBufferToCloudinary } = require('../utils/cloudinaryUpload');
 const { generateRandomToken } = require('../utils/jwt');
 const settingsModel = require('../models/settingsModel');
+const flutterwave = require('../utils/flutterwave');
 
 const VALID_TRANSITIONS = {
   pending: ['preparing', 'cancelled'],
@@ -17,10 +18,13 @@ const VALID_TRANSITIONS = {
 
 // POST /api/orders  { deliveryAddress, phone, notes, paymentMethod }
 // Checks out the customer's ENTIRE cart, splitting into one order per vendor.
-// Accepts multipart/form-data with an optional "receipt" file (a payment
-// screenshot/PDF for transfer payments) uploaded directly to Cloudinary —
-// the same reference + receipt is recorded against every order in this
-// checkout since they're paid together in one sitting.
+// Cash on delivery isn't offered — every order is paid into the single
+// company account (transfer, confirmed manually against an uploaded
+// receipt) or by card (charged via Flutterwave and verified automatically).
+// Accepts multipart/form-data with an optional "receipt" file for transfer
+// payments, uploaded directly to Cloudinary — the same reference + receipt
+// is recorded against every order in this checkout since they're paid
+// together in one sitting.
 const checkout = async (req, res) => {
   const { deliveryAddress, phone, notes, paymentMethod } = req.body;
   const cartItems = await cartModel.findByCustomer(req.user.id);
@@ -37,8 +41,8 @@ const checkout = async (req, res) => {
   if (!deliveryAddress || !phone) {
     throw new ApiError(422, 'deliveryAddress and phone are required for checkout.');
   }
-  if (paymentMethod && !['card', 'transfer', 'cash'].includes(paymentMethod)) {
-    throw new ApiError(422, 'paymentMethod must be one of: card, transfer, cash.');
+  if (paymentMethod && !['card', 'transfer'].includes(paymentMethod)) {
+    throw new ApiError(422, 'paymentMethod must be one of: card, transfer.');
   }
 
   let receiptUrl = null;
@@ -89,7 +93,30 @@ const checkout = async (req, res) => {
     sendOrderConfirmationEmail(req.user.email, req.user.fullname, full).catch(() => {});
   }
 
-  return ok(res, createdOrders, 'Order(s) placed successfully.', 201);
+  // Card payments are charged once, across the whole checkout (mirroring
+  // the shared payment_ref) — send the customer to Flutterwave's hosted
+  // checkout, then verify + mark every order from this payment_ref paid
+  // once they come back (see verifyCardPayment / flutterwaveWebhook).
+  let paymentLink = null;
+  if (paymentMethod === 'card') {
+    const total = createdOrders.reduce((sum, o) => sum + Number(o.total), 0);
+    try {
+      paymentLink = await flutterwave.initializePayment({
+        txRef: paymentRef,
+        amount: total,
+        email: req.user.email,
+        name: req.user.fullname,
+        phone,
+        redirectUrl: `${process.env.CLIENT_URL}/checkout/callback`,
+      });
+    } catch (err) {
+      // The orders already exist (as unpaid) — surface the failure clearly
+      // rather than silently leaving the customer on a blank checkout.
+      throw new ApiError(502, `Card payment could not be started: ${err.message}`);
+    }
+  }
+
+  return ok(res, { orders: createdOrders, paymentLink }, 'Order(s) placed successfully.', 201);
 };
 
 // GET /api/orders  (role-aware: customer sees own, vendor sees own vendor's, admin sees all)
@@ -143,6 +170,14 @@ const updateOrderStatus = async (req, res) => {
     throw new ApiError(400, `Cannot move order from "${order.status}" to "${status}".`);
   }
 
+  // The vendor go-ahead: payment must be verified (paid_at set — either by
+  // an admin confirming a transfer receipt, or Flutterwave confirming a
+  // card charge) before a vendor can start preparing the order. Admins can
+  // always override this (e.g. to unblock a manually-confirmed edge case).
+  if (req.user.role !== 'admin' && order.status === 'pending' && status === 'preparing' && !order.paid_at) {
+    throw new ApiError(400, 'Payment for this order hasn\'t been verified yet. We\'ll notify you as soon as it is.');
+  }
+
   const updated = await orderModel.updateStatus(order.id, status);
   const full = await orderModel.findById(order.id);
 
@@ -151,4 +186,68 @@ const updateOrderStatus = async (req, res) => {
   return ok(res, updated, 'Order status updated.');
 };
 
-module.exports = { checkout, listOrders, getOrder, updateOrderStatus };
+// GET /api/orders/verify-payment?txRef=LT-XXXXXXXXXX  -- customer-facing,
+// called from the /checkout/callback page after Flutterwave redirects back.
+const verifyCardPayment = async (req, res) => {
+  const { txRef } = req.query;
+  if (!txRef) throw new ApiError(422, 'txRef is required.');
+
+  const orders = await orderModel.findByPaymentRef(txRef);
+  if (!orders.length) throw new ApiError(404, 'No orders found for this payment reference.');
+  if (orders[0].customer_id !== req.user.id && req.user.role !== 'admin') {
+    throw new ApiError(403, 'You do not have access to this payment.');
+  }
+
+  const result = await flutterwave.verifyByReference(txRef);
+  if (!result.successful) {
+    return ok(res, { verified: false, orders }, 'Payment was not successful.');
+  }
+
+  const expectedTotal = orders.reduce((sum, o) => sum + Number(o.total), 0);
+  if (Number(result.amount) < expectedTotal) {
+    // Under-payment — do not mark as paid, this needs a human to look at it.
+    throw new ApiError(409, 'The amount paid does not match the order total. Contact support.');
+  }
+
+  await orderModel.markPaid(orders.map((o) => o.id));
+  const updatedOrders = await Promise.all(orders.map((o) => orderModel.findById(o.id)));
+
+  return ok(res, { verified: true, orders: updatedOrders }, 'Payment verified.');
+};
+
+// POST /api/webhooks/flutterwave  -- server-to-server, no auth middleware.
+// This is the reliable source of truth (the customer's browser redirect
+// alone can be missed if they close the tab); verifyCardPayment above is
+// the fast-path for when they do come back.
+const flutterwaveWebhook = async (req, res) => {
+  const signature = req.headers['verif-hash'];
+  if (!signature || signature !== process.env.FLW_WEBHOOK_HASH) {
+    return res.status(401).json({ received: false });
+  }
+
+  const event = req.body;
+  const txRef = event?.data?.tx_ref;
+  const status = event?.data?.status;
+
+  if (txRef && status === 'successful') {
+    try {
+      const result = await flutterwave.verifyByReference(txRef);
+      if (result.successful) {
+        const orders = await orderModel.findByPaymentRef(txRef);
+        const expectedTotal = orders.reduce((sum, o) => sum + Number(o.total), 0);
+        if (Number(result.amount) >= expectedTotal) {
+          await orderModel.markPaid(orders.map((o) => o.id));
+        }
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Flutterwave webhook processing failed:', err);
+    }
+  }
+
+  // Always 200 so Flutterwave doesn't endlessly retry a webhook we've
+  // already looked at — verifyCardPayment is a fine fallback either way.
+  return res.status(200).json({ received: true });
+};
+
+module.exports = { checkout, listOrders, getOrder, updateOrderStatus, verifyCardPayment, flutterwaveWebhook };

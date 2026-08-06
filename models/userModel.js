@@ -13,7 +13,7 @@ const create = async ({ fullname, email, password, role = 'customer', phone = nu
 };
 
 const findByEmail = async (email) => {
-  const { rows } = await query('SELECT * FROM users WHERE email = $1', [email]);
+  const { rows } = await query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [email]);
   return rows[0];
 };
 

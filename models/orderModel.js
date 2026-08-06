@@ -3,6 +3,14 @@ const { query, getClient } = require('../config/db');
 /**
  * Creates an order + its order_items atomically inside a transaction,
  * and clears the relevant cart items for that vendor.
+ *
+ * IMPORTANT: paid_at is always NULL here, even when a paymentRef is
+ * already assigned (paymentRef is just the reference the customer is
+ * expected to pay against / that a card charge is tied to — it is not
+ * proof of payment). paid_at is only ever set later, by an admin
+ * explicitly confirming a bank transfer, or by Flutterwave verification
+ * succeeding for a card payment. This is what the vendor go-ahead gate
+ * (see orderController.updateOrderStatus) actually checks against.
  */
 const createOrderFromCart = async ({
   customerId,
@@ -22,13 +30,12 @@ const createOrderFromCart = async ({
     await client.query('BEGIN');
 
     const total = items.reduce((sum, i) => sum + Number(i.price) * i.quantity, 0);
-    const paidAt = paymentRef ? new Date() : null;
     const commissionAmount = Math.round(total * commissionRate * 100) / 100;
     const payoutAmount = Math.round((total - commissionAmount) * 100) / 100;
 
     const orderResult = await client.query(
       `INSERT INTO orders (customer_id, vendor_id, total, delivery_address, phone, notes, payment_method, payment_ref, receipt_url, receipt_public_id, paid_at, commission_rate, commission_amount, payout_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13) RETURNING *`,
       [
         customerId,
         vendorId,
@@ -40,7 +47,6 @@ const createOrderFromCart = async ({
         paymentRef,
         receiptUrl,
         receiptPublicId,
-        paidAt,
         commissionRate,
         commissionAmount,
         payoutAmount,
@@ -143,6 +149,54 @@ const updateStatus = async (id, status) => {
   return rows[0];
 };
 
+// All orders created together in one checkout share the same payment_ref
+// (see orderController.checkout) — used to confirm every one of them at
+// once, whether that's an admin confirming a transfer or Flutterwave
+// verification succeeding for a card charge.
+const findByPaymentRef = async (paymentRef) => {
+  const { rows } = await query('SELECT * FROM orders WHERE payment_ref = $1', [paymentRef]);
+  return rows;
+};
+
+// Marks the given orders paid (idempotent — only touches ones not already
+// marked). Returns the orders that were actually just marked.
+const markPaid = async (orderIds) => {
+  if (!orderIds.length) return [];
+  const { rows } = await query(
+    `UPDATE orders SET paid_at = NOW()
+     WHERE id = ANY($1::uuid[]) AND paid_at IS NULL
+     RETURNING *`,
+    [orderIds]
+  );
+  return rows;
+};
+
+// Delivered, payment-verified, at least a day past verification, and not
+// already claimed by an earlier settlement request.
+const findEligibleForSettlement = async (vendorId) => {
+  const { rows } = await query(
+    `SELECT * FROM orders
+     WHERE vendor_id = $1
+       AND status = 'delivered'
+       AND paid_at IS NOT NULL
+       AND paid_at <= NOW() - INTERVAL '1 day'
+       AND settlement_id IS NULL
+     ORDER BY paid_at ASC`,
+    [vendorId]
+  );
+  return rows;
+};
+
+const linkOrdersToSettlement = async (orderIds, settlementId) => {
+  if (!orderIds.length) return;
+  await query('UPDATE orders SET settlement_id = $1 WHERE id = ANY($2::uuid[])', [settlementId, orderIds]);
+};
+
+// Frees up an order (back to "eligible") if its settlement gets rejected.
+const unlinkSettlement = async (settlementId) => {
+  await query('UPDATE orders SET settlement_id = NULL WHERE settlement_id = $1', [settlementId]);
+};
+
 const getItemsForFoodIds = async (foodIds) => {
   const { rows } = await query(
     `SELECT f.id AS food_id, f.name, f.price, f.is_available, f.vendor_id
@@ -159,5 +213,10 @@ module.exports = {
   findByVendor,
   findAllAdmin,
   updateStatus,
+  findByPaymentRef,
+  markPaid,
+  findEligibleForSettlement,
+  linkOrdersToSettlement,
+  unlinkSettlement,
   getItemsForFoodIds,
 };

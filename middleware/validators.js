@@ -85,7 +85,6 @@ const adUpdateRules = [
 ];
 
 const settlementCreateRules = [
-  body('amount').isFloat({ min: 0 }).withMessage('amount must be a positive number'),
   body('paymentRef').trim().notEmpty().withMessage('paymentRef is required').isLength({ max: 100 }),
   body('note').optional().trim(),
 ];

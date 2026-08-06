@@ -113,4 +113,13 @@ const remove = async (id) => {
   await query('DELETE FROM ads WHERE id = $1', [id]);
 };
 
-module.exports = { create, findById, findActive, findAll, update, remove };
+// Public, unauthenticated hit counter — deliberately just an atomic
+// increment (no per-user/session dedup), matching the simple running-total
+// nature of these columns. type is validated by the controller.
+const trackHit = async (id, type) => {
+  const column = type === 'click' ? 'clicks' : 'impressions';
+  const { rows } = await query(`UPDATE ads SET ${column} = ${column} + 1 WHERE id = $1 RETURNING *`, [id]);
+  return rows[0];
+};
+
+module.exports = { create, findById, findActive, findAll, update, remove, trackHit };

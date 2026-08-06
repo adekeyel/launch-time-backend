@@ -23,6 +23,7 @@ const adminRoutes = require('./routes/adminRoutes');
 const adRoutes = require('./routes/adRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const staffRoutes = require('./routes/staffRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 
 const app = express();
 
@@ -64,6 +65,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/ads', adRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/staff', staffRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
 // ---------- 404 + error handling ----------
 app.use(notFound);

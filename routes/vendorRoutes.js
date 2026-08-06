@@ -35,6 +35,7 @@ router.put(
 );
 
 // Settlement (payout) requests — vendor submits a receipt, admin reviews.
+router.get('/me/settlements/eligible', authenticate, authorize('vendor'), settlementController.listEligibleOrders);
 router.post(
   '/me/settlements',
   authenticate,
