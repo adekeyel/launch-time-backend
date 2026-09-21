@@ -426,9 +426,26 @@ const setVendorTier = async (req, res) => {
     fields.pro_since = new Date();
   }
 
+  const before = await vendorModel.findById(req.params.id);
+  if (!before) throw new ApiError(404, 'Vendor not found.');
+
   const updated = await vendorModel.update(req.params.id, fields);
   if (!updated) throw new ApiError(404, 'Vendor not found.');
-  return ok(res, updated, `Vendor set to Tier ${tier}.`);
+
+  // First-time verification (Tier 0 -> 1+): everything the vendor saved while
+  // unverified was forced to draft, so publish it now. Otherwise the shop would
+  // be visible but its menu would still be empty.
+  let published = 0;
+  if (Number(before.tier) < 1 && Number(tier) >= 1) {
+    published = await foodModel.publishAllForVendor(updated.id);
+  }
+  return ok(
+    res,
+    updated,
+    published > 0
+      ? `Vendor set to Tier ${tier}. ${published} draft menu item${published === 1 ? '' : 's'} published.`
+      : `Vendor set to Tier ${tier}.`
+  );
 };
 
 // ---------------- SUBSCRIPTIONS (Pro / Enterprise payment confirmation) ----------------

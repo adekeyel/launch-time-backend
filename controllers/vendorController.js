@@ -79,6 +79,11 @@ const updateMyVendorProfile = async (req, res) => {
   if (fields.opening_hours !== undefined) {
     fields.opening_hours = validateOpeningHours(fields.opening_hours);
   }
+  if (fields.offpay_merchant_ref !== undefined) {
+    const ref = String(fields.offpay_merchant_ref ?? '').trim();
+    if (ref.length > 150) throw new ApiError(422, 'OffPay account reference is too long (max 150 characters).');
+    fields.offpay_merchant_ref = ref || null;
+  }
   if (fields.orders_paused !== undefined && typeof fields.orders_paused !== 'boolean') {
     throw new ApiError(422, 'orders_paused must be true or false.');
   }

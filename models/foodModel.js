@@ -116,8 +116,18 @@ const update = async (id, fields) => {
   return rows[0];
 };
 
+// Tier 0 vendors can only save drafts (is_available = FALSE). When an admin
+// verifies a vendor for the first time, their saved drafts go live.
+const publishAllForVendor = async (vendorId) => {
+  const { rowCount } = await query(
+    'UPDATE foods SET is_available = TRUE WHERE vendor_id = $1 AND is_available = FALSE',
+    [vendorId]
+  );
+  return rowCount;
+};
+
 const remove = async (id) => {
   await query('DELETE FROM foods WHERE id = $1', [id]);
 };
 
-module.exports = { create, findById, findAll, findAllByOwner, update, remove };
+module.exports = { create, findById, findAll, findAllByOwner, update, remove, publishAllForVendor };
