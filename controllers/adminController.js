@@ -261,7 +261,7 @@ const getAnalytics = async (req, res) => {
       query(`SELECT status, COUNT(*)::int AS count FROM vendors GROUP BY status`),
       query(`SELECT status, COUNT(*)::int AS count FROM orders GROUP BY status`),
       query(
-        `SELECT COALESCE(SUM(total), 0)::float AS total_revenue, COUNT(*)::int AS total_orders
+        `SELECT COALESCE(SUM(COALESCE(subtotal, total)), 0)::float AS total_revenue, COUNT(*)::int AS total_orders
          FROM orders WHERE status != 'cancelled'`
       ),
     ]);
@@ -290,12 +290,14 @@ const listAllAds = async (req, res) => {
 };
 
 // POST /api/admin/ads  - multipart/form-data, "media" file (image or short video)
+const AD_PLACEMENTS = ['top', 'middle', 'bottom', 'hero', 'tile'];
+
 const createAd = async (req, res) => {
   const { title, linkUrl, placement, page = 'all', displayOrder = 0, startsAt, endsAt } = req.body;
 
   if (!req.file) throw new ApiError(422, 'An image or video file ("media") is required for the ad.');
-  if (!['top', 'middle', 'bottom'].includes(placement)) {
-    throw new ApiError(422, 'placement must be one of: top, middle, bottom.');
+  if (!AD_PLACEMENTS.includes(placement)) {
+    throw new ApiError(422, `placement must be one of: ${AD_PLACEMENTS.join(', ')}.`);
   }
 
   const uploaded = await uploadBufferToCloudinary(req.file.buffer, {
@@ -325,6 +327,9 @@ const updateAd = async (req, res) => {
   if (!existing) throw new ApiError(404, 'Ad not found.');
 
   const fields = { ...req.body };
+  if (fields.placement !== undefined && !AD_PLACEMENTS.includes(fields.placement)) {
+    throw new ApiError(422, `placement must be one of: ${AD_PLACEMENTS.join(', ')}.`);
+  }
   if (fields.display_order !== undefined) fields.display_order = Number(fields.display_order);
   if (fields.is_active !== undefined) fields.is_active = fields.is_active === true || fields.is_active === 'true';
 

@@ -481,3 +481,83 @@ ALTER TABLE ads ADD COLUMN IF NOT EXISTS clicks INTEGER NOT NULL DEFAULT 0;
 -- This index keeps that lookup fast instead of scanning the whole table.
 CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));
 
+-- ---------------------------------------------------------------------
+-- Opening hours, order pausing and delivery fees
+--
+-- opening_hours: JSON keyed mon..sun, each { "open": "08:00", "close": "21:00" }
+--   or null for a closed day (Lagos time). NULL column = always open, so
+--   existing vendors keep taking orders until they choose to set hours.
+-- orders_paused: vendor's instant "stop taking orders" switch.
+-- delivery_fee / free_delivery_above: flat fee, and an optional food subtotal
+--   above which delivery is free. Set 0 / NULL for free delivery.
+-- ---------------------------------------------------------------------
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS opening_hours JSONB;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS orders_paused BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC(10, 2) NOT NULL DEFAULT 0;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS free_delivery_above NUMERIC(10, 2);
+
+-- orders.total is what the customer pays (subtotal + delivery_fee).
+-- Commission is taken on subtotal only; payout_amount includes the delivery
+-- fee (the vendor delivers, so they keep it). subtotal is NULL on orders
+-- placed before delivery fees existed - read it as COALESCE(subtotal, total).
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS subtotal NUMERIC(10, 2);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC(10, 2) NOT NULL DEFAULT 0;
+
+-- ---------------------------------------------------------------------
+-- Customer reviews: one per delivered order. vendors.rating_avg /
+-- rating_count are kept up to date by reviewModel.create so vendor listings
+-- (which select v.*) carry them without extra queries.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS reviews (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id    UUID NOT NULL UNIQUE REFERENCES orders(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    vendor_id   UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+    rating      SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    comment     TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reviews_vendor ON reviews(vendor_id, created_at DESC);
+
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS rating_avg NUMERIC(2, 1);
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS rating_count INTEGER NOT NULL DEFAULT 0;
+
+-- ---------------------------------------------------------------------
+-- Homepage ad space
+--   hero: the large rotating banner on the home page (images, animated GIFs
+--         or short videos)
+--   tile: the small static promo squares beside it
+-- The original CHECK only allowed top / middle / bottom, so it is replaced.
+-- (Found by definition rather than by name, so it works whatever the
+-- constraint was originally called.)
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    c RECORD;
+BEGIN
+    FOR c IN
+        SELECT conname FROM pg_constraint
+        WHERE conrelid = 'ads'::regclass
+          AND contype = 'c'
+          AND pg_get_constraintdef(oid) ILIKE '%placement%'
+    LOOP
+        EXECUTE format('ALTER TABLE ads DROP CONSTRAINT %I', c.conname);
+    END LOOP;
+
+    ALTER TABLE ads ADD CONSTRAINT ads_placement_check
+        CHECK (placement IN ('top', 'middle', 'bottom', 'hero', 'tile'));
+END $$;
+
+-- ---------------------------------------------------------------------
+-- Site content (CMS): one row per editable section of the public website
+-- (banner, tiles, footer, headings, ...). `content` holds only what an admin
+-- has saved; anything not saved falls back to built-in defaults, and deleting
+-- a row resets that section. See utils/contentSchema.js.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS site_content (
+    section     VARCHAR(50) PRIMARY KEY,
+    content     JSONB NOT NULL,
+    updated_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

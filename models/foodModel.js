@@ -11,7 +11,8 @@ const create = async ({ vendorId, name, description, price, category, image, ima
 
 const findById = async (id) => {
   const { rows } = await query(
-    `SELECT f.*, v.business_name, v.id AS vendor_id, v.status AS vendor_status
+    `SELECT f.*, v.business_name, v.id AS vendor_id, v.status AS vendor_status,
+            v.opening_hours AS vendor_opening_hours, v.orders_paused AS vendor_orders_paused
      FROM foods f JOIN vendors v ON v.id = f.vendor_id WHERE f.id = $1`,
     [id]
   );
@@ -51,7 +52,9 @@ const findAll = async ({ vendorId, search, category, page = 1, limit = 20, inclu
   params.push(limit, offset);
 
   const { rows } = await query(
-    `SELECT f.*, v.business_name FROM foods f JOIN vendors v ON v.id = f.vendor_id
+    `SELECT f.*, v.business_name,
+            v.opening_hours AS vendor_opening_hours, v.orders_paused AS vendor_orders_paused
+     FROM foods f JOIN vendors v ON v.id = f.vendor_id
      ${where}
      ORDER BY f.created_at DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,

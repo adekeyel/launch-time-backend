@@ -75,6 +75,7 @@ router.post('/me/staff', vendorStaffController.createStaff);
 router.put('/me/staff/:id', uuidParamRules('id'), validate, vendorStaffController.updateStaff);
 router.delete('/me/staff/:id', uuidParamRules('id'), validate, vendorStaffController.deleteStaff);
 
+router.get('/:id/reviews', uuidParamRules('id'), paginationRules, validate, vendorController.listVendorReviews);
 router.get('/:id', uuidParamRules('id'), validate, vendorController.getVendor);
 
 module.exports = router;

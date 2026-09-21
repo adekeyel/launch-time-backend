@@ -6,7 +6,10 @@ const { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } = require('../u
 const { uploadBufferToCloudinary } = require('../utils/cloudinaryUpload');
 const { generateRandomToken } = require('../utils/jwt');
 const settingsModel = require('../models/settingsModel');
+const reviewModel = require('../models/reviewModel');
 const flutterwave = require('../utils/flutterwave');
+const { getOpenStatus, closedMessage } = require('../utils/hours');
+const { computeDeliveryFee } = require('../utils/delivery');
 
 const VALID_TRANSITIONS = {
   pending: ['preparing', 'cancelled'],
@@ -57,11 +60,19 @@ const checkout = async (req, res) => {
   // Defensive re-check: a cart item's vendor could have lost Tier 1+ status
   // (or been suspended) between browsing and checkout.
   const vendorIds = [...new Set(cartItems.map((i) => i.vendor_id))];
+  const vendorsById = {};
   for (const vendorId of vendorIds) {
     const vendor = await vendorModel.findById(vendorId);
     if (!vendor || vendor.status !== 'approved' || vendor.tier < 1) {
       throw new ApiError(400, `${vendor?.business_name ?? 'A vendor'} in your cart is not currently accepting orders.`);
     }
+    // Opening hours / "pause orders" — checked here, on the server, so a
+    // stale cart page can't place an order with a closed kitchen.
+    const openStatus = getOpenStatus(vendor);
+    if (!openStatus.is_open) {
+      throw new ApiError(400, `${closedMessage(vendor.business_name, openStatus)} Remove their items from your cart or try again later.`);
+    }
+    vendorsById[vendorId] = vendor;
   }
 
   const commissionRate = Number(await settingsModel.getValue('commission_rate', '0.05'));
@@ -74,6 +85,8 @@ const checkout = async (req, res) => {
 
   const createdOrders = [];
   for (const vendorId of Object.keys(byVendor)) {
+    const foodSubtotal = byVendor[vendorId].reduce((sum, i) => sum + Number(i.price) * i.quantity, 0);
+    const deliveryFee = computeDeliveryFee(vendorsById[vendorId], foodSubtotal);
     const order = await orderModel.createOrderFromCart({
       customerId: req.user.id,
       vendorId,
@@ -86,6 +99,7 @@ const checkout = async (req, res) => {
       receiptUrl,
       receiptPublicId,
       commissionRate,
+      deliveryFee,
     });
     const full = await orderModel.findById(order.id);
     createdOrders.push(full);
@@ -152,6 +166,42 @@ const getOrder = async (req, res) => {
   }
 
   return ok(res, order);
+};
+
+// POST /api/orders/:id/review  { rating, comment }  -- customer, delivered orders only
+// One review per order. The vendor's average rating is updated with it.
+const createReview = async (req, res) => {
+  const order = await orderModel.findById(req.params.id);
+  if (!order || order.customer_id !== req.user.id) throw new ApiError(404, 'Order not found.');
+  if (order.status !== 'delivered') {
+    throw new ApiError(400, 'You can review an order once it has been delivered.');
+  }
+
+  const rating = Number(req.body.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw new ApiError(422, 'rating must be a whole number from 1 to 5.');
+  }
+  const comment = typeof req.body.comment === 'string' ? req.body.comment.trim().slice(0, 1000) : '';
+
+  if (await reviewModel.findByOrder(order.id)) {
+    throw new ApiError(409, 'You have already reviewed this order.');
+  }
+
+  let review;
+  try {
+    review = await reviewModel.create({
+      orderId: order.id,
+      customerId: req.user.id,
+      vendorId: order.vendor_id,
+      rating,
+      comment: comment || null,
+    });
+  } catch (err) {
+    // Two simultaneous submissions: the UNIQUE(order_id) index catches the second.
+    if (err.code === '23505') throw new ApiError(409, 'You have already reviewed this order.');
+    throw err;
+  }
+  return ok(res, review, 'Thanks for your review.', 201);
 };
 
 // PUT /api/orders/:id  { status }  -- vendor (own orders) or admin
@@ -250,4 +300,12 @@ const flutterwaveWebhook = async (req, res) => {
   return res.status(200).json({ received: true });
 };
 
-module.exports = { checkout, listOrders, getOrder, updateOrderStatus, verifyCardPayment, flutterwaveWebhook };
+module.exports = {
+  checkout,
+  listOrders,
+  getOrder,
+  createReview,
+  updateOrderStatus,
+  verifyCardPayment,
+  flutterwaveWebhook,
+};

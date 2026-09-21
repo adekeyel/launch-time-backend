@@ -27,7 +27,9 @@ const incrementItem = async (customerId, foodId, quantity) => {
 const findByCustomer = async (customerId) => {
   const { rows } = await query(
     `SELECT c.id, c.quantity, f.id AS food_id, f.name, f.price, f.image, f.is_available,
-            v.id AS vendor_id, v.business_name
+            v.id AS vendor_id, v.business_name,
+            v.delivery_fee AS vendor_delivery_fee, v.free_delivery_above AS vendor_free_delivery_above,
+            v.opening_hours AS vendor_opening_hours, v.orders_paused AS vendor_orders_paused
      FROM cart_items c
      JOIN foods f ON f.id = c.food_id
      JOIN vendors v ON v.id = f.vendor_id

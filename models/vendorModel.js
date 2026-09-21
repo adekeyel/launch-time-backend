@@ -79,8 +79,9 @@ const findAll = async ({ status, search, page = 1, limit = 20, includeAll = fals
 // safeguard are all admin-editable without a code change.
 //
 // Approximations, documented rather than hidden:
-//  - "Customer rating" uses the vendor's average food rating (there's no
-//    separate vendor-review system yet).
+//  - "Customer rating" uses the vendor's customer-review average once they
+//    have reviews (vendors.rating_avg); until then it falls back to the
+//    average food rating.
 //  - "Delivery performance" uses delivered/total orders as a proxy, since
 //    per-status timestamps aren't tracked yet for real fulfillment timing.
 //  - "Distance" only contributes when the caller supplies coordinates;
@@ -145,7 +146,8 @@ const findRanked = async ({ search, page = 1, limit = 20, customerLat, customerL
 
     // Rating: damped toward neutral (0.5) until the vendor has enough
     // completed orders, so a handful of 5-star ratings can't game ranking.
-    const ratingRaw = Number(m.avg_rating || 0) / 5;
+    const reviewRating = Number(v.rating_count) > 0 && v.rating_avg != null ? Number(v.rating_avg) : null;
+    const ratingRaw = (reviewRating ?? Number(m.avg_rating || 0)) / 5;
     const ratingConfidence = Math.min(completedOrders / Math.max(minOrdersForRating, 1), 1);
     const ratingScore = totalOrders === 0 ? 0.5 : ratingRaw * ratingConfidence + 0.5 * (1 - ratingConfidence);
 
@@ -214,13 +216,19 @@ const update = async (id, fields) => {
     'offpay_merchant_ref',
     'payment_verified_at',
     'pro_since',
+    'opening_hours',
+    'orders_paused',
+    'delivery_fee',
+    'free_delivery_above',
   ];
   const sets = [];
   const params = [];
 
   allowed.forEach((key) => {
     if (fields[key] !== undefined) {
-      params.push(fields[key]);
+      // JSONB column: send an explicit JSON string (or NULL to clear).
+      const value = key === 'opening_hours' && fields[key] !== null ? JSON.stringify(fields[key]) : fields[key];
+      params.push(value);
       sets.push(`${key} = $${params.length}`);
     }
   });

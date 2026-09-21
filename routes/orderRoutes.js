@@ -15,6 +15,7 @@ router.post('/', authorize('customer'), upload.single('receipt'), checkoutRules,
 router.get('/verify-payment', orderController.verifyCardPayment);
 router.get('/', paginationRules, validate, orderController.listOrders);
 router.get('/:id', uuidParamRules('id'), validate, orderController.getOrder);
+router.post('/:id/review', authorize('customer'), uuidParamRules('id'), validate, orderController.createReview);
 router.put(
   '/:id',
   authorize('vendor', 'admin'),

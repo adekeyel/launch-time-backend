@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const adminController = require('../controllers/adminController');
+const contentController = require('../controllers/contentController');
 const { authenticate, authorize } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const validate = require('../middleware/validate');
@@ -68,6 +69,12 @@ router.put(
 // ---- Settings (editable platform config, e.g. OffPay registration link) ----
 router.get('/settings', adminController.listSettings);
 router.put('/settings/:key', adminController.updateSetting);
+
+// ---- Site content (every editable part of the public website) ----
+router.get('/content', contentController.getAdminContent);
+router.post('/content/image', upload.single('image'), contentController.uploadContentImage);
+router.put('/content/:section', contentController.saveSection);
+router.delete('/content/:section', contentController.resetSection);
 
 // ---- Vendor tier (OffPay verification / Pro) ----
 router.put('/vendors/:id/tier', uuidParamRules('id'), validate, adminController.setVendorTier);

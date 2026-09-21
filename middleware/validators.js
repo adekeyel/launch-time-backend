@@ -69,7 +69,9 @@ const orderStatusRules = [
 
 const adCreateRules = [
   body('title').trim().notEmpty().withMessage('Ad title is required').isLength({ max: 150 }),
-  body('placement').isIn(['top', 'middle', 'bottom']).withMessage('placement must be top, middle, or bottom'),
+  body('placement')
+    .isIn(['top', 'middle', 'bottom', 'hero', 'tile'])
+    .withMessage('placement must be top, middle, bottom, hero, or tile'),
   body('page').optional().trim().isLength({ max: 50 }),
   body('linkUrl').optional({ checkFalsy: true }).isURL().withMessage('linkUrl must be a valid URL'),
   body('displayOrder').optional().isInt(),
@@ -77,7 +79,7 @@ const adCreateRules = [
 
 const adUpdateRules = [
   body('title').optional().trim().isLength({ max: 150 }),
-  body('placement').optional().isIn(['top', 'middle', 'bottom']),
+  body('placement').optional().isIn(['top', 'middle', 'bottom', 'hero', 'tile']),
   body('page').optional().trim().isLength({ max: 50 }),
   body('link_url').optional({ checkFalsy: true }).isURL().withMessage('link_url must be a valid URL'),
   body('is_active').optional().isBoolean(),

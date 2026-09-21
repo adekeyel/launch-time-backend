@@ -2,6 +2,7 @@ const foodModel = require('../models/foodModel');
 const vendorModel = require('../models/vendorModel');
 const { ApiError, ok } = require('../utils/response');
 const { uploadBufferToCloudinary, deleteFromCloudinary } = require('../utils/cloudinaryUpload');
+const { presentFood } = require('../utils/presenters');
 
 // GET /api/foods  (public)
 const listFoods = async (req, res) => {
@@ -13,7 +14,7 @@ const listFoods = async (req, res) => {
     page: Number(page),
     limit: Number(limit),
   });
-  return ok(res, { foods: rows, total, page: Number(page), limit: Number(limit) });
+  return ok(res, { foods: rows.map((f) => presentFood(f)), total, page: Number(page), limit: Number(limit) });
 };
 
 // GET /api/vendors/me/foods  (vendor only — sees every item they own,
@@ -31,7 +32,7 @@ const listMyFoods = async (req, res) => {
 const getFood = async (req, res) => {
   const food = await foodModel.findById(req.params.id);
   if (!food) throw new ApiError(404, 'Food item not found.');
-  return ok(res, food);
+  return ok(res, presentFood(food));
 };
 
 // POST /api/foods  (vendor only, uses req.vendor from ownership middleware)

@@ -24,22 +24,30 @@ const createOrderFromCart = async ({
   receiptUrl = null,
   receiptPublicId = null,
   commissionRate = 0.05,
+  deliveryFee = 0,
 }) => {
   const client = await getClient();
   try {
     await client.query('BEGIN');
 
-    const total = items.reduce((sum, i) => sum + Number(i.price) * i.quantity, 0);
-    const commissionAmount = Math.round(total * commissionRate * 100) / 100;
-    const payoutAmount = Math.round((total - commissionAmount) * 100) / 100;
+    // subtotal = the food. total = what the customer pays (food + delivery).
+    // Commission applies to the food only; the vendor keeps the delivery fee,
+    // so it goes into their payout (settlements sum payout_amount).
+    const subtotal = Math.round(items.reduce((sum, i) => sum + Number(i.price) * i.quantity, 0) * 100) / 100;
+    const fee = Math.round(Number(deliveryFee || 0) * 100) / 100;
+    const total = Math.round((subtotal + fee) * 100) / 100;
+    const commissionAmount = Math.round(subtotal * commissionRate * 100) / 100;
+    const payoutAmount = Math.round((subtotal - commissionAmount + fee) * 100) / 100;
 
     const orderResult = await client.query(
-      `INSERT INTO orders (customer_id, vendor_id, total, delivery_address, phone, notes, payment_method, payment_ref, receipt_url, receipt_public_id, paid_at, commission_rate, commission_amount, payout_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13) RETURNING *`,
+      `INSERT INTO orders (customer_id, vendor_id, total, subtotal, delivery_fee, delivery_address, phone, notes, payment_method, payment_ref, receipt_url, receipt_public_id, paid_at, commission_rate, commission_amount, payout_amount)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, $13, $14, $15) RETURNING *`,
       [
         customerId,
         vendorId,
         total,
+        subtotal,
+        fee,
         deliveryAddress,
         phone,
         notes,
@@ -78,7 +86,8 @@ const createOrderFromCart = async ({
 
 const findById = async (id) => {
   const { rows } = await query(
-    `SELECT o.*, v.business_name, v.user_id AS vendor_user_id, u.fullname AS customer_name, u.email AS customer_email
+    `SELECT o.*, v.business_name, v.user_id AS vendor_user_id, u.fullname AS customer_name, u.email AS customer_email,
+            (SELECT r.rating FROM reviews r WHERE r.order_id = o.id) AS review_rating
      FROM orders o
      JOIN vendors v ON v.id = o.vendor_id
      JOIN users u ON u.id = o.customer_id
@@ -96,7 +105,9 @@ const findById = async (id) => {
 const findByCustomer = async (customerId, { page = 1, limit = 20 } = {}) => {
   const offset = (page - 1) * limit;
   const { rows } = await query(
-    `SELECT o.*, v.business_name FROM orders o JOIN vendors v ON v.id = o.vendor_id
+    `SELECT o.*, v.business_name,
+            (SELECT r.rating FROM reviews r WHERE r.order_id = o.id) AS review_rating
+     FROM orders o JOIN vendors v ON v.id = o.vendor_id
      WHERE o.customer_id = $1 ORDER BY o.created_at DESC LIMIT $2 OFFSET $3`,
     [customerId, limit, offset]
   );
