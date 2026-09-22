@@ -519,9 +519,12 @@ const activateCampaign = async (req, res) => {
 
   const vendor = await vendorModel.findById(campaign.vendor_id);
 
-  let mediaUrl = vendor.banner_url || vendor.logo_url;
-  let mediaPublicId = null;
-  let mediaType = 'image';
+  // Use the banner the vendor uploaded with their request by default. An admin
+  // can still swap in a different file here (e.g. the vendor sent a fix by
+  // email) without the vendor needing to submit a new campaign.
+  let mediaUrl = campaign.media_url || vendor.banner_url || vendor.logo_url;
+  let mediaPublicId = campaign.media_public_id || null;
+  let mediaType = campaign.media_type || 'image';
   if (req.file) {
     const uploaded = await uploadBufferToCloudinary(req.file.buffer, { folder: 'launch-time/campaigns', maxDuration: 30 });
     mediaUrl = uploaded.url;
@@ -529,17 +532,18 @@ const activateCampaign = async (req, res) => {
     mediaType = uploaded.resourceType;
   }
   if (!mediaUrl) {
-    throw new ApiError(400, 'This vendor has no banner/logo to use as ad creative — upload a media file to activate.');
+    throw new ApiError(400, 'This campaign has no banner to use — upload one to activate it.');
   }
 
-  const placement = campaign.campaign_type === 'homepage' ? 'top' : 'middle';
+  // campaign_type is already one of ads.placement's values (hero/tile/top/middle/bottom),
+  // so this campaign becomes exactly the ad space the vendor paid for — no guessing.
   const ad = await adModel.create({
-    title: `${vendor.business_name} — ${campaign.campaign_type.replace('_', ' ')}`,
+    title: `${vendor.business_name} — ${campaign.campaign_type}`,
     mediaUrl,
     mediaPublicId,
     mediaType,
     linkUrl: `/vendors/${vendor.id}`,
-    placement,
+    placement: campaign.campaign_type,
     page: 'all',
     displayOrder: 0,
   });

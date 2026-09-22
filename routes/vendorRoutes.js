@@ -6,6 +6,7 @@ const settlementController = require('../controllers/settlementController');
 const foodController = require('../controllers/foodController');
 const subscriptionController = require('../controllers/subscriptionController');
 const adCampaignController = require('../controllers/adCampaignController');
+const adRequestController = require('../controllers/adRequestController');
 const branchController = require('../controllers/branchController');
 const vendorStaffController = require('../controllers/vendorStaffController');
 const { authenticate, authorize } = require('../middleware/auth');
@@ -57,9 +58,25 @@ router.put('/me/subscriptions/:id/cancel', uuidParamRules('id'), validate, subsc
 router.get('/me/billing', authenticate, authorize('vendor'), subscriptionController.listMyBilling);
 
 // Self-service advertising campaigns (Tier 1+).
+router.get('/me/ad-spaces', authenticate, authorize('vendor'), adCampaignController.getAdSpaces);
 router.use('/me/campaigns', authenticate, authorize('vendor'));
-router.post('/me/campaigns', adCampaignController.createCampaign);
+router.post('/me/campaigns', upload.single('banner'), adCampaignController.createCampaign);
 router.get('/me/campaigns', adCampaignController.listMyCampaigns);
+
+// Buy an ad space: pick a space + duration, pay via OffPay, upload the banner. An admin
+// confirms the payment and approves it (see admin routes).
+router.get('/me/ad-options', authenticate, authorize('vendor'), adRequestController.getOptions);
+router.use('/me/ad-requests', authenticate, authorize('vendor'));
+router.post(
+  '/me/ad-requests',
+  upload.fields([
+    { name: 'banner', maxCount: 1 },
+    { name: 'receipt', maxCount: 1 },
+  ]),
+  adRequestController.createRequest
+);
+router.get('/me/ad-requests', adRequestController.listMyRequests);
+router.put('/me/ad-requests/:id/cancel', uuidParamRules('id'), validate, adRequestController.cancelMyRequest);
 
 // Enterprise: branches (multi-branch management).
 router.use('/me/branches', authenticate, authorize('vendor'));

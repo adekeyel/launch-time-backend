@@ -1,10 +1,10 @@
 const { query } = require('../config/db');
 
-const create = async ({ vendorId, campaignType, durationDays, price, paymentRef }) => {
+const create = async ({ vendorId, campaignType, durationDays, price, paymentRef, mediaUrl, mediaPublicId, mediaType }) => {
   const { rows } = await query(
-    `INSERT INTO ad_campaigns (vendor_id, campaign_type, duration_days, price, payment_ref)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [vendorId, campaignType, durationDays, price, paymentRef]
+    `INSERT INTO ad_campaigns (vendor_id, campaign_type, duration_days, price, payment_ref, media_url, media_public_id, media_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [vendorId, campaignType, durationDays, price, paymentRef, mediaUrl, mediaPublicId || null, mediaType]
   );
   return rows[0];
 };

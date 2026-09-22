@@ -236,7 +236,7 @@ CREATE TABLE IF NOT EXISTS ads (
     media_public_id VARCHAR(255),
     media_type      VARCHAR(10) NOT NULL DEFAULT 'image' CHECK (media_type IN ('image', 'video')),
     link_url        TEXT,
-    placement       VARCHAR(10) NOT NULL CHECK (placement IN ('top', 'middle', 'bottom')),
+    placement       VARCHAR(10) NOT NULL CHECK (placement IN ('top', 'middle', 'bottom', 'hero', 'tile')),
     page            VARCHAR(50) NOT NULL DEFAULT 'all',
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     display_order   INTEGER NOT NULL DEFAULT 0,
@@ -274,10 +274,26 @@ VALUES
     ('pro_price_yearly', '50000', TRUE),
 
     -- Vendor self-service ad campaign pricing (NGN, fixed-duration)
-    ('campaign_price_1day', '2000', TRUE),
-    ('campaign_price_3day', '5000', TRUE),
-    ('campaign_price_7day', '10000', TRUE),
-    ('campaign_price_30day', '35000', TRUE),
+    ('campaign_price_hero_1day', '5000', TRUE),
+    ('campaign_price_hero_3day', '12000', TRUE),
+    ('campaign_price_hero_7day', '25000', TRUE),
+    ('campaign_price_hero_30day', '80000', TRUE),
+    ('campaign_price_tile_1day', '3000', TRUE),
+    ('campaign_price_tile_3day', '7500', TRUE),
+    ('campaign_price_tile_7day', '15000', TRUE),
+    ('campaign_price_tile_30day', '50000', TRUE),
+    ('campaign_price_top_1day', '2000', TRUE),
+    ('campaign_price_top_3day', '5000', TRUE),
+    ('campaign_price_top_7day', '10000', TRUE),
+    ('campaign_price_top_30day', '35000', TRUE),
+    ('campaign_price_middle_1day', '1500', TRUE),
+    ('campaign_price_middle_3day', '4000', TRUE),
+    ('campaign_price_middle_7day', '8000', TRUE),
+    ('campaign_price_middle_30day', '28000', TRUE),
+    ('campaign_price_bottom_1day', '1000', TRUE),
+    ('campaign_price_bottom_3day', '2500', TRUE),
+    ('campaign_price_bottom_7day', '5000', TRUE),
+    ('campaign_price_bottom_30day', '18000', TRUE),
 
     -- Ranking algorithm weights (must sum to 1.0) — admin-configurable
     ('ranking_weight_rating', '0.30', FALSE),
@@ -354,21 +370,38 @@ CREATE INDEX IF NOT EXISTS idx_billing_records_subscription ON billing_records(s
 -- fixed-duration packages, available from Tier 1 up)
 -- =========================================================
 CREATE TABLE IF NOT EXISTS ad_campaigns (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    vendor_id       UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
-    campaign_type   VARCHAR(30) NOT NULL CHECK (campaign_type IN (
-                        'homepage', 'sponsored_search', 'category', 'spotlight', 'limited_offer', 'festival'
-                    )),
-    duration_days   INTEGER NOT NULL CHECK (duration_days IN (1, 3, 7, 30)),
-    price           NUMERIC(10, 2) NOT NULL,
-    payment_ref     VARCHAR(100),
-    status          VARCHAR(20) NOT NULL DEFAULT 'pending_payment'
-                    CHECK (status IN ('pending_payment', 'active', 'expired', 'cancelled')),
-    ad_id           UUID REFERENCES ads(id) ON DELETE SET NULL,
-    starts_at       TIMESTAMPTZ,
-    ends_at         TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    vendor_id           UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+    -- Matches ads.placement exactly, so activating a campaign is a 1:1 copy,
+    -- not a lossy guess at which strip it becomes.
+    campaign_type       VARCHAR(10) NOT NULL CHECK (campaign_type IN ('hero', 'tile', 'top', 'middle', 'bottom')),
+    duration_days       INTEGER NOT NULL CHECK (duration_days IN (1, 3, 7, 30)),
+    price               NUMERIC(10, 2) NOT NULL,
+    payment_ref         VARCHAR(100),
+    -- The vendor's proposed banner, uploaded at request time. Admin can still
+    -- replace it with a different file at activation (see activateCampaign).
+    media_url           TEXT,
+    media_public_id     VARCHAR(255),
+    media_type          VARCHAR(10) CHECK (media_type IN ('image', 'video')),
+    status              VARCHAR(20) NOT NULL DEFAULT 'pending_payment'
+                        CHECK (status IN ('pending_payment', 'active', 'expired', 'cancelled')),
+    ad_id               UUID REFERENCES ads(id) ON DELETE SET NULL,
+    starts_at           TIMESTAMPTZ,
+    ends_at             TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Migrating an existing install: widen campaign_type to the real placements and
+-- add the banner columns. Safe to re-run.
+ALTER TABLE ad_campaigns DROP CONSTRAINT IF EXISTS ad_campaigns_campaign_type_check;
+ALTER TABLE ad_campaigns ALTER COLUMN campaign_type TYPE VARCHAR(10);
+ALTER TABLE ad_campaigns ADD CONSTRAINT ad_campaigns_campaign_type_check
+    CHECK (campaign_type IN ('hero', 'tile', 'top', 'middle', 'bottom'));
+ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS media_url TEXT;
+ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS media_public_id VARCHAR(255);
+ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS media_type VARCHAR(10);
+-- (ads.placement's hero/tile widening is already handled further down by the
+-- existing dynamic-lookup migration block — not duplicated here.)
 
 CREATE INDEX IF NOT EXISTS idx_ad_campaigns_vendor ON ad_campaigns(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_ad_campaigns_status ON ad_campaigns(status);

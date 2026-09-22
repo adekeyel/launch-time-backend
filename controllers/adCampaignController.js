@@ -2,17 +2,37 @@ const adCampaignModel = require('../models/adCampaignModel');
 const vendorModel = require('../models/vendorModel');
 const settingsModel = require('../models/settingsModel');
 const { ApiError, ok } = require('../utils/response');
+const { uploadBufferToCloudinary, deleteFromCloudinary } = require('../utils/cloudinaryUpload');
+const { AD_SPACES, DURATIONS, PLACEMENT_KEYS, priceKey, mediaKind } = require('../utils/adSpaces');
 
-const DURATION_PRICE_KEYS = { 1: 'campaign_price_1day', 3: 'campaign_price_3day', 7: 'campaign_price_7day', 30: 'campaign_price_30day' };
+// Checks an uploaded file against one ad space's rules. Returns an error string, or null if it's fine.
+const checkBanner = (file, space) => {
+  if (!file) return 'Please upload your banner.';
+  if (!space.mimeTypes.includes(file.mimetype)) return `This space only accepts: ${space.note}`;
+  if (file.size > space.maxMb * 1024 * 1024) return `The banner is too large. The limit for this space is ${space.maxMb} MB.`;
+  return null;
+};
 
-const CAMPAIGN_TYPES = ['homepage', 'sponsored_search', 'category', 'spotlight', 'limited_offer', 'festival'];
+// GET /api/vendors/me/ad-spaces  — sizes/notes + current prices, for the "Advertise" form.
+const getAdSpaces = async (req, res) => {
+  const spaces = await Promise.all(
+    PLACEMENT_KEYS.map(async (key) => {
+      const space = AD_SPACES[key];
+      const prices = {};
+      for (const d of DURATIONS) prices[d] = Number(await settingsModel.getValue(priceKey(key, d), '0'));
+      return { ...space, prices };
+    })
+  );
+  return ok(res, { spaces, durations: DURATIONS });
+};
 
-// POST /api/vendors/me/campaigns  { campaignType, durationDays, paymentRef? }
+// POST /api/vendors/me/campaigns  (multipart: banner)  { placement, durationDays, paymentRef }
 // Available from Tier 1 up. Same manual OffPay-reference pattern as
-// subscriptions and Tier 1 verification — admin confirms payment, then the
-// campaign is scheduled automatically.
+// subscriptions — admin confirms payment, then the campaign is scheduled
+// automatically using the exact banner the vendor uploaded here.
 const createCampaign = async (req, res) => {
-  const { campaignType, durationDays } = req.body;
+  const { durationDays } = req.body;
+  const placement = req.body.placement || req.body.campaignType; // campaignType kept for older clients
   const paymentRef = String(req.body.paymentRef || '').trim();
 
   const vendor = await vendorModel.findByUserId(req.user.id);
@@ -21,12 +41,10 @@ const createCampaign = async (req, res) => {
   if (vendor.tier < 1) {
     throw new ApiError(400, 'Advertising is available once you reach Tier 1 (verified payment account).');
   }
-  if (!CAMPAIGN_TYPES.includes(campaignType)) {
-    throw new ApiError(422, `campaignType must be one of: ${CAMPAIGN_TYPES.join(', ')}`);
-  }
-  const priceKey = DURATION_PRICE_KEYS[Number(durationDays)];
-  if (!priceKey) {
-    throw new ApiError(422, 'durationDays must be one of: 1, 3, 7, 30.');
+  const space = AD_SPACES[placement];
+  if (!space) throw new ApiError(422, `placement must be one of: ${PLACEMENT_KEYS.join(', ')}`);
+  if (!DURATIONS.includes(Number(durationDays))) {
+    throw new ApiError(422, `durationDays must be one of: ${DURATIONS.join(', ')}.`);
   }
   // Required so the admin has something to check against the OffPay account before activating.
   // (When automatic OffPay billing is wired in, this becomes optional/unused — payment
@@ -34,17 +52,34 @@ const createCampaign = async (req, res) => {
   if (paymentRef.length < 4 || paymentRef.length > 100) {
     throw new ApiError(422, 'Enter your OffPay payment reference (4–100 characters).');
   }
+  const bannerError = checkBanner(req.file, space);
+  if (bannerError) throw new ApiError(422, bannerError);
 
-  const price = Number(await settingsModel.getValue(priceKey, '0'));
-  const campaign = await adCampaignModel.create({
-    vendorId: vendor.id,
-    campaignType,
-    durationDays: Number(durationDays),
-    price,
-    paymentRef,
-  });
+  const price = Number(await settingsModel.getValue(priceKey(placement, Number(durationDays)), '0'));
 
-  return ok(res, campaign, 'Campaign created — pay via OffPay, then it will go live once confirmed.', 201);
+  let uploaded;
+  try {
+    uploaded = await uploadBufferToCloudinary(req.file.buffer, { folder: 'launch-time/campaigns', maxDuration: 30 });
+  } catch (err) {
+    throw new ApiError(502, "Couldn't upload your banner. Please try again.");
+  }
+
+  try {
+    const campaign = await adCampaignModel.create({
+      vendorId: vendor.id,
+      campaignType: placement,
+      durationDays: Number(durationDays),
+      price,
+      paymentRef,
+      mediaUrl: uploaded.url,
+      mediaPublicId: uploaded.publicId,
+      mediaType: uploaded.resourceType || mediaKind(req.file.mimetype),
+    });
+    return ok(res, campaign, 'Campaign created — pay via OffPay, then it will go live once confirmed.', 201);
+  } catch (err) {
+    deleteFromCloudinary(uploaded.publicId, uploaded.resourceType);
+    throw err;
+  }
 };
 
 // GET /api/vendors/me/campaigns
@@ -55,4 +90,4 @@ const listMyCampaigns = async (req, res) => {
   return ok(res, { campaigns: rows });
 };
 
-module.exports = { createCampaign, listMyCampaigns, CAMPAIGN_TYPES };
+module.exports = { getAdSpaces, createCampaign, listMyCampaigns, PLACEMENT_KEYS };
