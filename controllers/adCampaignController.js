@@ -12,10 +12,12 @@ const CAMPAIGN_TYPES = ['homepage', 'sponsored_search', 'category', 'spotlight',
 // subscriptions and Tier 1 verification — admin confirms payment, then the
 // campaign is scheduled automatically.
 const createCampaign = async (req, res) => {
-  const { campaignType, durationDays, paymentRef } = req.body;
+  const { campaignType, durationDays } = req.body;
+  const paymentRef = String(req.body.paymentRef || '').trim();
 
   const vendor = await vendorModel.findByUserId(req.user.id);
   if (!vendor) throw new ApiError(404, 'Vendor profile not found.');
+  if (vendor.status !== 'approved') throw new ApiError(403, 'Your kitchen must be approved before you can advertise.');
   if (vendor.tier < 1) {
     throw new ApiError(400, 'Advertising is available once you reach Tier 1 (verified payment account).');
   }
@@ -26,6 +28,12 @@ const createCampaign = async (req, res) => {
   if (!priceKey) {
     throw new ApiError(422, 'durationDays must be one of: 1, 3, 7, 30.');
   }
+  // Required so the admin has something to check against the OffPay account before activating.
+  // (When automatic OffPay billing is wired in, this becomes optional/unused — payment
+  // confirmation will come from OffPay's callback instead of a reference the vendor types in.)
+  if (paymentRef.length < 4 || paymentRef.length > 100) {
+    throw new ApiError(422, 'Enter your OffPay payment reference (4–100 characters).');
+  }
 
   const price = Number(await settingsModel.getValue(priceKey, '0'));
   const campaign = await adCampaignModel.create({
@@ -33,7 +41,7 @@ const createCampaign = async (req, res) => {
     campaignType,
     durationDays: Number(durationDays),
     price,
-    paymentRef: paymentRef || null,
+    paymentRef,
   });
 
   return ok(res, campaign, 'Campaign created — pay via OffPay, then it will go live once confirmed.', 201);

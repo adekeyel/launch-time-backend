@@ -265,6 +265,7 @@ CREATE TABLE IF NOT EXISTS settings (
 INSERT INTO settings (key, value, is_public)
 VALUES
     ('offpay_registration_url', 'https://offpay-gamma.vercel.app/auth/register', TRUE),
+    ('offpay_payment_note', 'Pay the amount shown to the LAUNCH TIME OffPay account, then enter your payment reference below.', TRUE),
     ('commission_rate', '0.05', FALSE),
 
     -- Tier 2 Pro subscription pricing (NGN)
